@@ -2,6 +2,8 @@
 
 Control [toio](https://toio.io/) with gamepad.
 
+![demo](https://raw.github.com/wiki/YushiOMOTE/toio-con/toio-con.gif)
+
 Tested with DualShock 4 controller.
 
 ## Key mapping
