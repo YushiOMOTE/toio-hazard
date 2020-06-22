@@ -1,0 +1,14 @@
+[package]
+name = "toio-con"
+version = "0.1.0"
+authors = ["Yushi OMOTE <yushiomote@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+gilrs = "0.7"
+toio = "0.1"
+log = "0.4"
+env_logger = "0.7"
+tokio = { version = "0.2", features = ["full"] }
+futures = "0.3"
+anyhow = "1.0"
