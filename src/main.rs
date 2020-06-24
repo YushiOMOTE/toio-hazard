@@ -211,50 +211,52 @@ async fn player_loop(mut cube: Cube, ctx: Context) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-struct Enemy {
-    id: usize,
-    cube: Cube,
-    inst: Instant,
+#[async_trait::async_trait]
+trait EnemyOp {
+    async fn init(&mut self, id: usize, cube: &mut Cube) -> Result<()>;
+
+    async fn update(
+        &mut self,
+        id: usize,
+        cube: &mut Cube,
+        player_pos: &Position,
+        enemy_pos: &Position,
+    ) -> Result<()>;
+}
+
+struct Easy {
     motion: (isize, isize),
     ctx: Context,
 }
 
-impl Enemy {
-    fn new(id: usize, cube: Cube, ctx: Context) -> Self {
+impl Easy {
+    fn new(ctx: Context) -> Self {
         Self {
-            id,
-            cube,
-            inst: Instant::now(),
             motion: (0, 0),
             ctx,
         }
     }
+}
 
-    async fn init(&mut self) -> Result<()> {
-        self.cube.light_on(0, 0, 255, None).await?;
+#[async_trait::async_trait]
+impl EnemyOp for Easy {
+    async fn init(&mut self, _: usize, cube: &mut Cube) -> Result<()> {
+        cube.light_on(0, 0, 255, None).await?;
         Ok(())
     }
 
-    async fn update(&mut self, pos: &Position) -> Result<()> {
-        if self.inst.elapsed() < Duration::from_millis(200) {
-            return Ok(());
-        }
-        self.inst = Instant::now();
-
-        let p = match self.cube.position().await? {
-            Some(p) => p,
-            None => {
-                warn!("Enemy is out of field");
-                return Ok(());
-            }
-        };
-
+    async fn update(
+        &mut self,
+        id: usize,
+        cube: &mut Cube,
+        player_pos: &Position,
+        enemy_pos: &Position,
+    ) -> Result<()> {
         let pi = std::f32::consts::PI;
-        let x0 = p.x as f32;
-        let y0 = p.y as f32;
-        let x1 = pos.x as f32;
-        let y1 = pos.y as f32;
+        let x0 = enemy_pos.x as f32;
+        let y0 = enemy_pos.y as f32;
+        let x1 = player_pos.x as f32;
+        let y1 = player_pos.y as f32;
 
         let dx = (x1 - x0).abs().powf(2.0);
         let dy = (y1 - y0).abs().powf(2.0);
@@ -262,10 +264,10 @@ impl Enemy {
 
         if d < 1000.0 {
             if let Some(rem) = self.ctx.lock().await.damage(10) {
-                self.cube.play_preset(SoundPresetId::Enter).await?;
+                cube.play_preset(SoundPresetId::Enter).await?;
                 info!(
                     "Player was caught by enemy {}: damange={}, remain={}",
-                    self.id, 10, rem
+                    id, 10, rem
                 );
             }
         }
@@ -279,7 +281,7 @@ impl Enemy {
             (true, false) => (xd / yd).atan() + pi * 3.0 / 2.0,
         };
 
-        let r0 = p.angle as isize;
+        let r0 = enemy_pos.angle as isize;
         let r1 = (r * (180.0 / pi)) as isize;
 
         let right = if r0 < 180 {
@@ -298,9 +300,66 @@ impl Enemy {
             (6, 6)
         };
         if (l, r) != self.motion {
-            self.cube.go(l, r, None).await?;
+            cube.go(l, r, None).await?;
             self.motion = (l, r);
         }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct Enemy<T> {
+    id: usize,
+    cube: Option<Cube>,
+    inst: Instant,
+    op: T,
+}
+
+impl<T> Enemy<T>
+where
+    T: EnemyOp,
+{
+    fn new(id: usize, cube: Cube, op: T) -> Self {
+        Self {
+            id,
+            cube: Some(cube),
+            inst: Instant::now(),
+            op,
+        }
+    }
+
+    async fn init(&mut self) -> Result<()> {
+        let mut cube = self.cube.take().unwrap();
+        self.op.init(self.id, &mut cube).await?;
+        self.cube = Some(cube);
+        Ok(())
+    }
+
+    async fn update(&mut self, player_pos: &Position) -> Result<()> {
+        let mut cube = self.cube.take().unwrap();
+        self.do_update(&mut cube, player_pos).await?;
+        self.cube = Some(cube);
+        Ok(())
+    }
+
+    async fn do_update(&mut self, cube: &mut Cube, player_pos: &Position) -> Result<()> {
+        if self.inst.elapsed() < Duration::from_millis(200) {
+            return Ok(());
+        }
+        self.inst = Instant::now();
+
+        let enemy_pos = match cube.position().await? {
+            Some(p) => p,
+            None => {
+                warn!("Enemy is out of field");
+                return Ok(());
+            }
+        };
+
+        self.op
+            .update(self.id, cube, player_pos, &enemy_pos)
+            .await?;
 
         Ok(())
     }
@@ -337,7 +396,7 @@ async fn main() -> Result<()> {
     let mut enemies: Vec<_> = enemies
         .into_iter()
         .enumerate()
-        .map(|(i, e)| Enemy::new(i, e, ctx.clone()))
+        .map(|(i, e)| Enemy::new(i, e, Easy::new(ctx.clone())))
         .collect();
 
     let mut events = player.events().await?;
