@@ -1,14 +1,16 @@
+use crate::{
+    context::{Context, PlayerStatus},
+    enemies::{easy::Easy, Enemy},
+};
 use anyhow::{bail, Result};
 use futures::prelude::*;
 use gilrs::{Axis, Button, Event, EventType};
 use log::*;
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use toio::{Cube, LightOp, Position, SoundPresetId};
-use tokio::sync::Mutex;
+use std::time::Duration;
+use toio::{Cube, LightOp};
 
+mod context;
+mod enemies;
 mod gil;
 
 #[derive(Debug, Clone, Default)]
@@ -94,59 +96,6 @@ struct State {
     speed: SpeedState,
 }
 
-enum PlayerStatus {
-    Fine,
-    Caution,
-    Danger,
-    Death,
-}
-
-#[derive(Debug)]
-struct GameContext {
-    health: usize,
-    hit: Option<Instant>,
-}
-
-impl GameContext {
-    fn new() -> Self {
-        Self {
-            health: 100,
-            hit: None,
-        }
-    }
-
-    fn damage(&mut self, damage: usize) -> Option<usize> {
-        if self.hit.is_none() {
-            self.hit = Some(Instant::now());
-            self.health = self.health.saturating_sub(damage);
-            Some(self.health)
-        } else {
-            None
-        }
-    }
-
-    fn status(&mut self) -> PlayerStatus {
-        if let Some(hit) = self.hit.as_ref() {
-            if hit.elapsed() > Duration::from_secs(2) {
-                self.hit = None;
-            }
-        }
-
-        match self.health {
-            0 => PlayerStatus::Death,
-            1..=29 => PlayerStatus::Danger,
-            30..=59 => PlayerStatus::Caution,
-            _ => PlayerStatus::Fine,
-        }
-    }
-
-    fn gameover(&self) -> bool {
-        self.health == 0
-    }
-}
-
-type Context = Arc<Mutex<GameContext>>;
-
 async fn player_loop(mut cube: Cube, ctx: Context) -> Result<()> {
     info!("Starting player...");
 
@@ -157,11 +106,25 @@ async fn player_loop(mut cube: Cube, ctx: Context) -> Result<()> {
     while let Some(Event { id, event, time }) = inputs.next().await {
         debug!("{:?} New event from {}: {:?}", time, id, event);
 
+        if ctx.gameover().await {
+            break;
+        }
+
+        match event {
+            EventType::ButtonPressed(button, _) => match button {
+                Button::Start => {
+                    ctx.pause().await;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+
         state.update(&event);
 
         let mut s = State::default();
 
-        match ctx.lock().await.status() {
+        match ctx.status().await {
             PlayerStatus::Fine => {
                 s.col.g = 255;
             }
@@ -175,16 +138,18 @@ async fn player_loop(mut cube: Cube, ctx: Context) -> Result<()> {
             _ => {}
         }
 
-        let w = state.boost;
-        if state.x.abs() / 2.0 > state.y.abs() {
-            let x = state.x * (10.0 + w * 10.0);
-            s.speed.r = (-1.0 * x) as isize;
-            s.speed.l = (1.0 * x) as isize;
-        } else {
-            let x = state.x * (80.0 - (20.0 * w));
-            let y = state.y * ((40.0 * w) + 20.0);
-            s.speed.r = (y * (100.0 - x.max(0.0).abs()) / 100.0) as isize;
-            s.speed.l = (y * (100.0 - x.min(0.0).abs()) / 100.0) as isize;
+        if !ctx.paused().await {
+            let w = state.boost;
+            if state.x.abs() / 2.0 > state.y.abs() {
+                let x = state.x * (10.0 + w * 10.0);
+                s.speed.r = (-1.0 * x) as isize;
+                s.speed.l = (1.0 * x) as isize;
+            } else {
+                let x = state.x * (80.0 - (20.0 * w));
+                let y = state.y * ((40.0 * w) + 20.0);
+                s.speed.r = (y * (100.0 - x.max(0.0).abs()) / 100.0) as isize;
+                s.speed.l = (y * (100.0 - x.min(0.0).abs()) / 100.0) as isize;
+            }
         }
 
         if ds.col != s.col {
@@ -209,160 +174,6 @@ async fn player_loop(mut cube: Cube, ctx: Context) -> Result<()> {
     info!("Player stopped");
 
     Ok(())
-}
-
-#[async_trait::async_trait]
-trait EnemyOp {
-    async fn init(&mut self, id: usize, cube: &mut Cube) -> Result<()>;
-
-    async fn update(
-        &mut self,
-        id: usize,
-        cube: &mut Cube,
-        player_pos: &Position,
-        enemy_pos: &Position,
-    ) -> Result<()>;
-}
-
-struct Easy {
-    motion: (isize, isize),
-    ctx: Context,
-}
-
-impl Easy {
-    fn new(ctx: Context) -> Self {
-        Self {
-            motion: (0, 0),
-            ctx,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl EnemyOp for Easy {
-    async fn init(&mut self, _: usize, cube: &mut Cube) -> Result<()> {
-        cube.light_on(0, 0, 255, None).await?;
-        Ok(())
-    }
-
-    async fn update(
-        &mut self,
-        id: usize,
-        cube: &mut Cube,
-        player_pos: &Position,
-        enemy_pos: &Position,
-    ) -> Result<()> {
-        let pi = std::f32::consts::PI;
-        let x0 = enemy_pos.x as f32;
-        let y0 = enemy_pos.y as f32;
-        let x1 = player_pos.x as f32;
-        let y1 = player_pos.y as f32;
-
-        let dx = (x1 - x0).abs().powf(2.0);
-        let dy = (y1 - y0).abs().powf(2.0);
-        let d = dx + dy;
-
-        if d < 1000.0 {
-            if let Some(rem) = self.ctx.lock().await.damage(10) {
-                cube.play_preset(SoundPresetId::Enter).await?;
-                info!(
-                    "Player was caught by enemy {}: damange={}, remain={}",
-                    id, 10, rem
-                );
-            }
-        }
-
-        let xd = (x1 - x0).abs();
-        let yd = (y1 - y0).abs();
-        let r = match (x1 > x0, y1 > y0) {
-            (true, true) => (yd / xd).atan(),
-            (false, true) => (xd / yd).atan() + pi / 2.0,
-            (false, false) => (yd / xd).atan() + pi,
-            (true, false) => (xd / yd).atan() + pi * 3.0 / 2.0,
-        };
-
-        let r0 = enemy_pos.angle as isize;
-        let r1 = (r * (180.0 / pi)) as isize;
-
-        let right = if r0 < 180 {
-            r0 < r1 && r1 < r0 + 180
-        } else {
-            r0 < r1 || r1 < (r0 + 180) % 360
-        };
-
-        let (l, r) = if (r0 - r1).abs() > 10 {
-            if right {
-                (2, -2)
-            } else {
-                (-2, 2)
-            }
-        } else {
-            (6, 6)
-        };
-        if (l, r) != self.motion {
-            cube.go(l, r, None).await?;
-            self.motion = (l, r);
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct Enemy<T> {
-    id: usize,
-    cube: Option<Cube>,
-    inst: Instant,
-    op: T,
-}
-
-impl<T> Enemy<T>
-where
-    T: EnemyOp,
-{
-    fn new(id: usize, cube: Cube, op: T) -> Self {
-        Self {
-            id,
-            cube: Some(cube),
-            inst: Instant::now(),
-            op,
-        }
-    }
-
-    async fn init(&mut self) -> Result<()> {
-        let mut cube = self.cube.take().unwrap();
-        self.op.init(self.id, &mut cube).await?;
-        self.cube = Some(cube);
-        Ok(())
-    }
-
-    async fn update(&mut self, player_pos: &Position) -> Result<()> {
-        let mut cube = self.cube.take().unwrap();
-        self.do_update(&mut cube, player_pos).await?;
-        self.cube = Some(cube);
-        Ok(())
-    }
-
-    async fn do_update(&mut self, cube: &mut Cube, player_pos: &Position) -> Result<()> {
-        if self.inst.elapsed() < Duration::from_millis(200) {
-            return Ok(());
-        }
-        self.inst = Instant::now();
-
-        let enemy_pos = match cube.position().await? {
-            Some(p) => p,
-            None => {
-                warn!("Enemy is out of field");
-                return Ok(());
-            }
-        };
-
-        self.op
-            .update(self.id, cube, player_pos, &enemy_pos)
-            .await?;
-
-        Ok(())
-    }
 }
 
 #[tokio::main]
@@ -391,12 +202,12 @@ async fn main() -> Result<()> {
         info!("Enemy cube {} connected", i);
     }
 
-    let ctx = Arc::new(Mutex::new(GameContext::new()));
+    let ctx = Context::new();
 
     let mut enemies: Vec<_> = enemies
         .into_iter()
         .enumerate()
-        .map(|(i, e)| Enemy::new(i, e, Easy::new(ctx.clone())))
+        .map(|(i, e)| Enemy::new(i, e, ctx.clone(), Easy::new()))
         .collect();
 
     let mut events = player.events().await?;
@@ -411,7 +222,7 @@ async fn main() -> Result<()> {
 
     // Start event loop
     while let Some(e) = events.next().await {
-        if ctx.lock().await.gameover() {
+        if ctx.gameover().await {
             info!("Player is dead. Game over...");
             break;
         }
