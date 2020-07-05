@@ -13,7 +13,7 @@ The player cube gets damanged when it caught by zombie cubes. Game is over when 
 
 ## Health
 
-The blinking LED of the player cube indicates the health status.
+The blinking LED color of the player cube indicates the health status.
 
 * Green         ... Fine.
 * Yellow        ... Caution.
