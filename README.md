@@ -6,6 +6,12 @@ Require multiple cubes. The nearest cube becomes the player cube, which you can 
 The rest cubes become zombie cubes, which chase the player cube. The rule is simple; just run away from zombie cubes forever.
 The player cube gets damanged when it caught by zombie cubes. Game is over when the health of the player cube goes zero.
 
+## Requisites
+
+* Multiple cubes.
+* A board with toio position ids.
+* A game pad.
+
 ## Key mapping
 
 * Left stick    ... Move.
