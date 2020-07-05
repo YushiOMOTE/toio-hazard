@@ -1,16 +1,20 @@
-# toio-con
+# toio-hazard
 
-Control [toio](https://toio.io/) with gamepad.
+Run away from zombie cubes.
 
-![demo](https://raw.github.com/wiki/YushiOMOTE/toio-con/toio-con.gif)
-
-Tested with DualShock 4 controller.
+Require multiple cubes. The nearest cube becomes the player cube, which you can control with a gamepad.
+The rest cubes become zombie cubes, which chase the player cube. The rule is simple; just run away from zombie cubes forever.
+The player cube gets damanged when it caught by zombie cubes. Game is over when the health of the player cube goes zero.
 
 ## Key mapping
 
-* Left joystick ... Move.
+* Left stick    ... Move.
 * L2/R2         ... Boost.
-* North button  ... Green light.
-* South button  ... Blue light.
-* East button   ... Red light.
-* West button   ... Pink light.
+
+## Health
+
+The blinking LED of the player cube indicates the health status.
+
+* Green         ... Fine.
+* Yellow        ... Caution.
+* Red           ... Danger.
