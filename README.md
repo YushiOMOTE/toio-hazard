@@ -1,5 +1,7 @@
 # toio-hazard
 
+![](https://github.com/YushiOMOTE/toio-hazard/blob/master/assets/demo.gif?raw=true)
+
 Run away from zombie cubes.
 
 Require multiple cubes. The nearest cube becomes the player cube, which you can control with a gamepad.
